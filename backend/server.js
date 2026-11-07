@@ -9,8 +9,8 @@ const app = express();
 app.disable('x-powered-by');
 app.use(cors());
 app.use(express.json({limit:'32kb'}));
-const {DATABASE_URL,JWT_SECRET} = process.env;
-if(!DATABASE_URL || !JWT_SECRET || JWT_SECRET.length<32) throw Error('Configura DATABASE_URL y JWT_SECRET (mínimo 32 caracteres)');
+const {DATABASE_URL} = process.env;
+if(!DATABASE_URL) throw Error('Configura DATABASE_URL en Render');
 const db = new Pool({connectionString:DATABASE_URL,ssl:/localhost|127\.0\.0\.1/.test(DATABASE_URL)?false:{rejectUnauthorized:false}});
 const q=(sql,args=[])=>db.query(sql,args);
 const route=fn=>(req,res,next)=>Promise.resolve(fn(req,res)).catch(next);
@@ -19,17 +19,37 @@ const numberId=v=>{const n=Number(v);return Number.isSafeInteger(n)&&n>0?n:null;
 const key=()=>crypto.randomBytes(16).toString('hex');
 async function hashPassword(password){const salt=key();const hash=await scrypt(password,salt,64);return `${salt}:${hash.toString('hex')}`;}
 async function verifyPassword(password,stored){try{const [salt,expected]=stored.split(':');const hash=await scrypt(password,salt,64);const a=Buffer.from(expected,'hex');return a.length===hash.length&&crypto.timingSafeEqual(a,hash);}catch{return false;}}
-const b64=v=>Buffer.from(JSON.stringify(v)).toString('base64url');
-function tokenFor(user){const h=b64({alg:'HS256',typ:'JWT'});const p=b64({sub:String(user.id),iat:Math.floor(Date.now()/1000),exp:Math.floor(Date.now()/1000)+7*86400});const body=h+'.'+p;return body+'.'+crypto.createHmac('sha256',JWT_SECRET).update(body).digest('base64url');}
-function verifyToken(token){try{const [h,p,s]=token.split('.');if(!h||!p||!s)return null;const expected=crypto.createHmac('sha256',JWT_SECRET).update(h+'.'+p).digest();const actual=Buffer.from(s,'base64url');if(actual.length!==expected.length||!crypto.timingSafeEqual(actual,expected))return null;const header=JSON.parse(Buffer.from(h,'base64url'));const payload=JSON.parse(Buffer.from(p,'base64url'));if(header.alg!=='HS256'||!Number.isFinite(payload.exp)||payload.exp<=Date.now()/1000)return null;return numberId(payload.sub);}catch{return null;}}
-const auth=(req,res,next)=>{const value=req.headers.authorization||'';const id=value.startsWith('Bearer ')?verifyToken(value.slice(7)):null;if(!id)return fail(res,401,'Sesión inválida o vencida');req.userId=id;next();};
+// Sesiones opacas: el token se entrega al móvil; solo su hash se guarda en PostgreSQL.
+const SESSION_DAYS=7;
+async function sessionFor(userId){
+ const token=crypto.randomBytes(32).toString('hex');
+ const tokenHash=crypto.createHash('sha256').update(token).digest('hex');
+ await q("INSERT INTO sesiones_clientes(cliente_id,token_hash,vence_en) VALUES($1,$2,NOW()+INTERVAL '7 days')",[userId,tokenHash]);
+ return token;
+}
+const auth=route(async(req,res,next)=>{
+ const value=req.headers.authorization||'';
+ const token=value.startsWith('Bearer ')?value.slice(7):'';
+ if(!/^[0-9a-f]{64}$/.test(token))return fail(res,401,'Sesión inválida o vencida');
+ const tokenHash=crypto.createHash('sha256').update(token).digest('hex');
+ const session=(await q('SELECT s.cliente_id FROM sesiones_clientes s JOIN clientes c ON c.id=s.cliente_id WHERE s.token_hash=$1 AND s.vence_en>NOW()',[tokenHash])).rows[0];
+ if(!session)return fail(res,401,'Sesión inválida o vencida');
+ req.userId=Number(session.cliente_id);
+ next();
+});
+app.post('/auth/logout',auth,route(async(req,res)=>{
+ const token=req.headers.authorization.slice(7);
+ const hash=crypto.createHash('sha256').update(token).digest('hex');
+ await q('DELETE FROM sesiones_clientes WHERE token_hash=$1 AND cliente_id=$2',[hash,req.userId]);
+ res.json({ok:true});
+}));
 const emailValid=s=>typeof s==='string'&&s.length<=254&&/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 app.get('/health',(_,res)=>res.json({ok:true}));
 app.post('/auth/registro',route(async(req,res)=>{
  const nombre=String(req.body.nombre||'').trim();const email=String(req.body.email||'').trim().toLowerCase();const password=req.body.password;
  if(nombre.length<2||nombre.length>100||!emailValid(email)||typeof password!=='string'||password.length<8||password.length>128)return fail(res,400,'Nombre (2-100), correo válido y contraseña (8-128) requeridos');
  const hash=await hashPassword(password);
- try{const u=(await q('INSERT INTO clientes(nombre,email,password_hash) VALUES($1,$2,$3) RETURNING id,nombre,email',[nombre,email,hash])).rows[0];res.status(201).json({token:tokenFor(u),cliente:u});}
+ try{const u=(await q('INSERT INTO clientes(nombre,email,password_hash) VALUES($1,$2,$3) RETURNING id,nombre,email',[nombre,email,hash])).rows[0];res.status(201).json({token:await sessionFor(u.id),cliente:u});}
  catch(e){if(e.code==='23505')return fail(res,409,'El correo ya está registrado');throw e;}
 }));
 app.post('/auth/login',route(async(req,res)=>{
@@ -37,7 +57,7 @@ app.post('/auth/login',route(async(req,res)=>{
  if(!emailValid(email)||typeof password!=='string')return fail(res,400,'Credenciales inválidas');
  const u=(await q('SELECT id,nombre,email,password_hash FROM clientes WHERE email=$1',[email])).rows[0];
  if(!u||!(await verifyPassword(password,u.password_hash)))return fail(res,401,'Correo o contraseña incorrectos');
- res.json({token:tokenFor(u),cliente:{id:u.id,nombre:u.nombre,email:u.email}});
+ res.json({token:await sessionFor(u.id),cliente:{id:u.id,nombre:u.nombre,email:u.email}});
 }));
 app.get('/clientes/me',auth,route(async(req,res)=>{const u=(await q('SELECT id,nombre,email FROM clientes WHERE id=$1',[req.userId])).rows[0];if(!u)return fail(res,401,'Cliente no disponible');res.json(u);}));
 app.get('/productos',auth,route(async(req,res)=>res.json((await q('SELECT id,nombre,precio::float FROM productos ORDER BY id')).rows)));
@@ -83,6 +103,8 @@ app.get('/facturas/:id',auth,route(async(req,res)=>{
 app.use((err,req,res,next)=>{console.error(err);res.status(500).json({error:'Error interno del servidor'});});
 async function init(){
  await q('CREATE TABLE IF NOT EXISTS clientes(id BIGSERIAL PRIMARY KEY,nombre VARCHAR(100) NOT NULL,email VARCHAR(254) UNIQUE NOT NULL,password_hash TEXT NOT NULL,creado_en TIMESTAMPTZ DEFAULT NOW())');
+ await q('CREATE TABLE IF NOT EXISTS sesiones_clientes(id BIGSERIAL PRIMARY KEY,cliente_id BIGINT NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,token_hash CHAR(64) NOT NULL UNIQUE,vence_en TIMESTAMPTZ NOT NULL)');
+ await q('CREATE INDEX IF NOT EXISTS sesiones_cliente_vencimiento_idx ON sesiones_clientes(cliente_id,vence_en)');
  await q('CREATE TABLE IF NOT EXISTS productos(id SERIAL PRIMARY KEY,nombre VARCHAR(120) UNIQUE NOT NULL,precio NUMERIC(12,2) NOT NULL CHECK(precio>0))');
  await q(`INSERT INTO productos(nombre,precio) VALUES ('Cuaderno',12000),('Lápiz',2000),('Borrador',1500),('Bolígrafo',3500),('Regla',4000),('Carpeta',6500),('Resaltador',5500),('Memoria USB 32GB',35000) ON CONFLICT(nombre) DO NOTHING`);
  await q('CREATE TABLE IF NOT EXISTS carritos_clientes(id BIGSERIAL PRIMARY KEY,cliente_id BIGINT NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,producto_id INTEGER NOT NULL REFERENCES productos(id),cantidad INTEGER NOT NULL DEFAULT 1 CHECK(cantidad BETWEEN 1 AND 9999),UNIQUE(cliente_id,producto_id))');
