@@ -1,52 +1,37 @@
-# Carrito minimalista (Expo + SQLite + Render + Node.js)
+# Carrito de compras con clientes — Expo SDK 58 + Render + PostgreSQL
 
-## Contenido
-- `app/index.tsx`: interfaz, funciones, useState/useEffect, SQLite local, llamadas REST y factura PDF.
-- `backend/server.js`: API Express para crear, consultar, cambiar cantidades y borrar productos.
-- `render.yaml`: configuración de despliegue para Render.
+Incluye registro, inicio de sesión, catálogo, carrito por cliente, confirmación de compra, facturas históricas y PDF. **No es facturación electrónica DIAN**.
 
-## Requisitos
-- Node.js 20 o superior.
-- Expo Go compatible con el SDK del proyecto (SDK 54), o emulador / build de desarrollo.
-- Una base PostgreSQL accesible desde Render. **SQLite está en el teléfono como caché local**, PostgreSQL guarda los datos del servidor.
+## Migración desde tu proyecto actual
 
-## Ejecutar aplicación
-1. Descomprime el ZIP y abre terminal en la carpeta `carrito-minimal`.
-2. Ejecuta `npm install`.
-3. Copia `.env.example` a `.env` y escribe `EXPO_PUBLIC_API_URL=https://TU-SERVICIO.onrender.com` (sin barra final).
-4. Ejecuta `npx expo start -c` y abre desde Expo Go compatible.
+1. Guarda una copia del proyecto original.
+2. Copia `app/`, `lib/`, `metro.config.js`, `package.json`, `app.json`, `tsconfig.json` y `backend/` sobre el proyecto existente. No sobrescribas tu `.env` real.
+3. Frontend: `npm install`, `npx expo install --fix`, `npx expo-doctor`.
+4. Si `expo-secure-store` no se instala, ejecuta `npx expo install expo-secure-store`.
+5. En Render conserva el servicio Node existente, con `Root Directory = backend`, `Build Command = npm install`, `Start Command = npm start`. Añade la variable `JWT_SECRET` con un valor aleatorio de al menos 32 caracteres; conserva `DATABASE_URL`. Reinicia/despliega el servicio después de subir los archivos a GitHub.
+6. Mantén `.env` en la raíz con `EXPO_PUBLIC_API_URL=https://TU-API.onrender.com` (sin barra final).
+7. Ejecuta `npx expo start --tunnel -c` y abre el QR **nuevo** en Expo Go.
+8. Registra un cliente, inicia sesión, agrega productos, confirma compra y abre `Mis facturas` para generar PDF.
 
-## Ejecutar backend local
-1. Abre otra terminal en `backend` y ejecuta `npm install`.
-2. Configura `DATABASE_URL` en el entorno (o utiliza `node --env-file=.env server.js` con un archivo `.env`).
-3. Ejecuta `npm start` (o `node --env-file=.env server.js`).
-4. Comprueba `http://localhost:3000/health` y `/carrito`.
-5. Para probar desde un teléfono físico, usa la IP LAN del computador, no `localhost`, y asegúrate de permitir el puerto en el firewall.
+## Tablas PostgreSQL
 
-## Publicar backend en Render
-1. Sube este proyecto a GitHub.
-2. Crea o conecta una base PostgreSQL y copia su URL de conexión interna si está en Render, o la URL de tu proveedor.
-3. En Render crea un **Web Service** desde el repositorio, con **Root Directory** `backend`, **Build Command** `npm install`, **Start Command** `npm start`.
-4. Agrega la variable `DATABASE_URL` en **Environment**. No la pongas en el frontend.
-5. Al desplegar, comprueba `https://TU-SERVICIO.onrender.com/health`.
-6. Copia esa URL en `.env` del frontend y reinicia Expo con `npx expo start -c`.
+El servidor crea automáticamente `clientes`, `productos`, `carritos_clientes`, `facturas` y `factura_detalles`. Agrega las columnas `cliente_id` y `request_id` a `facturas` si ya existía. Las facturas antiguas sin cliente quedan conservadas, pero **no aparecerán en el historial de ningún cliente nuevo**. El carrito antiguo compartido no se migra a los nuevos carritos individuales.
 
-## API REST
-| Método | Ruta | Función |
-| --- | --- | --- |
-| GET | `/health` | Estado del servicio |
-| GET | `/carrito` | Leer carrito |
-| POST | `/carrito` | Agregar `{ "nombre":"Cuaderno", "precio":12000 }` |
-| PATCH | `/carrito/:id` | Actualizar `{ "cantidad":2 }` (0 elimina) |
-| DELETE | `/carrito/:id` | Eliminar producto |
-| DELETE | `/carrito` | Vaciar carrito |
+## Seguridad y límites
 
-## Factura PDF
-El botón genera un PDF con `expo-print` y abre el diálogo de compartir/guardar mediante `expo-sharing`. En Android/iOS se puede guardar en archivos según las aplicaciones instaladas. Es un comprobante académico, **no una factura electrónica validada por DIAN**.
+- Hash scrypt con salt aleatoria, JWT firmado con HMAC SHA-256 y caducidad de 7 días; sesión móvil en `expo-secure-store`.
+- Todas las rutas de catálogo/carrito/facturas requieren token; las consultas de factura verifican pertenencia al cliente.
+- Precio y total se calculan en PostgreSQL, no se confía en importes enviados por el dispositivo.
+- La confirmación usa transacción e identificador de solicitud para evitar duplicados si se repite exactamente el mismo identificador.
+- El caché SQLite es **solo lectura sin conexión**; las modificaciones requieren red y el backend de Render. Web utiliza caché en memoria y no guarda sesión tras recargar.
+- Proyecto académico: antes de producción añadir rate limiting, recuperación de contraseñas, verificación de correo, auditoría, HTTPS estricto, políticas de privacidad y revisión de SSL PostgreSQL. En Render la configuración de SSL `rejectUnauthorized:false` debe sustituirse por verificación de certificado cuando sea posible.
+- El PDF se genera en el dispositivo desde una factura persistida, no se guarda como archivo binario en PostgreSQL.
 
-## Límites intencionales del ejemplo
-- La SQLite local funciona como **copia de lectura** para consultar sin conexión. Para crear/modificar/eliminar se necesita el backend disponible; no se implementó cola de sincronización offline.
-- El carrito es **compartido entre todos los clientes** porque no hay autenticación ni ID por usuario. Es adecuado solo como demo académica, no para producción.
-- Los precios se expresan en COP y el total no incluye impuestos, descuentos ni envíos.
-- Render puede suspender un servicio gratuito por inactividad; la primera consulta puede tardar.
-- El PDF se genera en el dispositivo, no en Render.
+## Pruebas rápidas de API
+
+`GET /health` debe devolver `{ "ok": true }`.
+`POST /auth/registro`: `{ "nombre":"Ana", "email":"ana@example.com", "password":"claveSegura123" }`.
+`POST /auth/login`: `{ "email":"ana@example.com", "password":"claveSegura123" }`.
+Usar `Authorization: Bearer TOKEN` en `GET /clientes/me`, `GET /productos`, `GET /carrito`, `GET /facturas`.
+`POST /carrito`: `{ "producto_id": 1 }`.
+`POST /compras/confirmar`: `{ "request_id": "compra-unica-0001" }`.
