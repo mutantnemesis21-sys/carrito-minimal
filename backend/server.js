@@ -13,7 +13,7 @@ const {DATABASE_URL} = process.env;
 if(!DATABASE_URL) throw Error('Configura DATABASE_URL en Render');
 const db = new Pool({connectionString:DATABASE_URL,ssl:/localhost|127\.0\.0\.1/.test(DATABASE_URL)?false:{rejectUnauthorized:false}});
 const q=(sql,args=[])=>db.query(sql,args);
-const route=fn=>(req,res,next)=>Promise.resolve(fn(req,res)).catch(next);
+const route=fn=>(req,res,next)=>Promise.resolve().then(()=>fn(req,res,next)).catch(next);
 const fail=(res,status,error)=>res.status(status).json({error});
 const numberId=v=>{const n=Number(v);return Number.isSafeInteger(n)&&n>0?n:null;};
 const key=()=>crypto.randomBytes(16).toString('hex');

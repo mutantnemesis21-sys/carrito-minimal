@@ -35,3 +35,15 @@ El servidor crea automáticamente `clientes`, `productos`, `carritos_clientes`, 
 Usar `Authorization: Bearer TOKEN` en `GET /clientes/me`, `GET /productos`, `GET /carrito`, `GET /facturas`.
 `POST /carrito`: `{ "producto_id": 1 }`.
 `POST /compras/confirmar`: `{ "request_id": "compra-unica-0001" }`.
+
+
+## Autenticación sin JWT
+
+El backend requiere únicamente `DATABASE_URL` (además del `PORT` que Render proporciona).
+No requiere `JWT_SECRET`. El registro y login devuelven un token de sesión aleatorio
+con duración de 7 días. PostgreSQL guarda únicamente el hash SHA-256 del token
+en `sesiones_clientes`. El frontend existente envía el token en el encabezado
+`Authorization: Bearer ...`, por lo que no requiere cambiar el flujo de login.
+La ruta `POST /auth/logout` revoca la sesión en el servidor; el cliente debe
+llamarla antes de borrar el token local si desea cerrar sesión también en Render.
+Las sesiones anteriores basadas en JWT dejarán de ser válidas: inicia sesión de nuevo.
