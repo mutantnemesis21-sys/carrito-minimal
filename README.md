@@ -1,6 +1,6 @@
 # Carrito Pro Offline — Expo + SQLite + Render + PostgreSQL
 
-Versión académica 3.0. Incluye registro/login, sesiones opacas sin JWT, cliente/admin, catálogo con stock, carrito SQLite, compras offline, sincronización idempotente, historial de facturas y PDF.
+Versión académica 3.1. Incluye registro/login, sesiones opacas sin JWT, cliente/admin, catálogo con stock, carrito SQLite, compras offline, sincronización idempotente, historial de facturas y PDF.
 
 ## Requisitos
 - Node.js 20+ recomendado; Expo Go compatible con el SDK instalado.
@@ -27,13 +27,13 @@ Copia `.env.example` como `.env` y configura `EXPO_PUBLIC_API_URL=https://TU-SER
 
 Reemplaza `backend/server.js` y `backend/package.json`, sube a GitHub y despliega el mismo servicio web que ya tenías. No necesitas crear otro servicio. Mantén `DATABASE_URL`. **No necesita `JWT_SECRET`.**
 
-Para convertir una cuenta existente en administrador:
-1. Regístrala normalmente desde la aplicación.
-2. En Render → servicio web → Environment, crea `ADMIN_EMAIL` con el correo exacto de esa cuenta.
-3. Guarda y redepliega/reinicia el servicio. Al arrancar se actualiza su rol en PostgreSQL.
-4. Cierra sesión en Expo e inicia sesión de nuevo para cargar `rol=admin`.
+### Administrador predefinido
+En Render → Environment configura `ADMIN_PASSWORD` con una contraseña aleatoria de 12 a 128 caracteres. Al iniciar el backend por primera vez se crea la cuenta administrativa reservada. En la pantalla de login ingresa **admin** como usuario y la contraseña de Render. No uses el formulario de registro para crear administradores. La contraseña se almacena con hash; cambiar `ADMIN_PASSWORD` posteriormente **no cambia automáticamente** la contraseña de una cuenta admin existente. No compartas ni subas esa variable a GitHub.
 
-**Seguridad:** el registro público siempre crea clientes normales; no permite elegir rol. No establezcas `ADMIN_EMAIL` con el correo de una cuenta ajena. El backend verifica permisos en cada ruta admin. Las sesiones se guardan con SHA-256 en PostgreSQL y caducan a los 7 días.
+### Imágenes por URL
+El administrador puede introducir una URL pública `https://...` al crear o editar un producto. El backend guarda `imagen_url` en PostgreSQL; Expo muestra una vista previa y una imagen de sustitución si falla. SQLite guarda las URLs junto al catálogo para su uso offline; la foto remota podría no estar disponible sin internet. No es necesario Cloudinary.
+
+**Seguridad:** el registro público crea solo clientes normales. El servidor verifica los permisos administrativos en cada operación. Las sesiones se almacenan con hash en PostgreSQL y caducan a los 7 días.
 
 ## Flujo offline
 1. Con internet inicia sesión y sincroniza catálogo. SQLite guarda productos por usuario.
