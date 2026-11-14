@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "Carrito Clientes",
+    "slug": "carrito-minimal",
+    "scheme": "carritominimal",
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    },
+    "android": {
+      "package": "com.ejemplo.carritominimal"
+    },
+    "ios": {
+      "bundleIdentifier": "com.ejemplo.carritominimal"
+    }
+  }
+}

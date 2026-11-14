@@ -1,0 +1,23 @@
+import * as SQLite from 'expo-sqlite';
+import * as SecureStore from 'expo-secure-store';
+export type Producto={id:number;nombre:string;precio:number;stock:number;stock_minimo:number;activo:boolean};
+export type Item={producto_id:number;nombre:string;precio:number;cantidad:number};
+export type Pendiente={request_id:string;items:Item[];estado:string;error:string|null;creado_en:string};
+const db=SQLite.openDatabaseAsync('carrito_pro_v3.db');
+async function ready(){const d=await db;await d.execAsync(`PRAGMA journal_mode=WAL;
+CREATE TABLE IF NOT EXISTS productos_cache(cliente_id INTEGER NOT NULL,id INTEGER NOT NULL,nombre TEXT NOT NULL,precio REAL NOT NULL,stock INTEGER NOT NULL,stock_minimo INTEGER NOT NULL,activo INTEGER NOT NULL,PRIMARY KEY(cliente_id,id));
+CREATE TABLE IF NOT EXISTS carrito_local(cliente_id INTEGER NOT NULL,producto_id INTEGER NOT NULL,nombre TEXT NOT NULL,precio REAL NOT NULL,cantidad INTEGER NOT NULL,PRIMARY KEY(cliente_id,producto_id));
+CREATE TABLE IF NOT EXISTS compras_pendientes(cliente_id INTEGER NOT NULL,request_id TEXT NOT NULL,items_json TEXT NOT NULL,estado TEXT NOT NULL,error TEXT,creado_en TEXT NOT NULL,PRIMARY KEY(cliente_id,request_id));`);return d;}
+export const getToken=()=>SecureStore.getItemAsync('carrito_token');
+export const setToken=(token:string|null)=>token?SecureStore.setItemAsync('carrito_token',token):SecureStore.deleteItemAsync('carrito_token');
+export const getUser=async()=>{const x=await SecureStore.getItemAsync('carrito_user');return x?JSON.parse(x):null;};
+export const setUser=(u:any)=>u?SecureStore.setItemAsync('carrito_user',JSON.stringify(u)):SecureStore.deleteItemAsync('carrito_user');
+export async function loadProducts(uid:number):Promise<Producto[]>{const d=await ready();const rows=await d.getAllAsync<any>('SELECT id,nombre,precio,stock,stock_minimo,activo FROM productos_cache WHERE cliente_id=? ORDER BY id',uid);return rows.map(x=>({...x,activo:!!x.activo}));}
+export async function saveProducts(uid:number,items:Producto[]){const d=await ready();await d.withExclusiveTransactionAsync(async tx=>{await tx.runAsync('DELETE FROM productos_cache WHERE cliente_id=?',uid);for(const p of items)await tx.runAsync('INSERT INTO productos_cache VALUES(?,?,?,?,?,?,?)',uid,p.id,p.nombre,p.precio,p.stock,p.stock_minimo,p.activo?1:0);});}
+export async function loadCart(uid:number):Promise<Item[]>{const d=await ready();return d.getAllAsync<Item>('SELECT producto_id,nombre,precio,cantidad FROM carrito_local WHERE cliente_id=? ORDER BY producto_id',uid);}
+export async function changeCart(uid:number,p:Producto,delta:number){const d=await ready();await d.withExclusiveTransactionAsync(async tx=>{const old=await tx.getFirstAsync<{cantidad:number}>('SELECT cantidad FROM carrito_local WHERE cliente_id=? AND producto_id=?',uid,p.id);const next=Math.max(0,Math.min(9999,(old?.cantidad||0)+delta));if(!next)await tx.runAsync('DELETE FROM carrito_local WHERE cliente_id=? AND producto_id=?',uid,p.id);else await tx.runAsync('INSERT INTO carrito_local(cliente_id,producto_id,nombre,precio,cantidad) VALUES(?,?,?,?,?) ON CONFLICT(cliente_id,producto_id) DO UPDATE SET cantidad=excluded.cantidad,nombre=excluded.nombre,precio=excluded.precio',uid,p.id,p.nombre,p.precio,next);});}
+export async function clearCart(uid:number){const d=await ready();await d.runAsync('DELETE FROM carrito_local WHERE cliente_id=?',uid);}
+export async function queuePurchase(uid:number,id:string,items:Item[]){const d=await ready();await d.withExclusiveTransactionAsync(async tx=>{await tx.runAsync('INSERT INTO compras_pendientes(cliente_id,request_id,items_json,estado,error,creado_en) VALUES(?,?,?,\'pendiente\',NULL,?)',uid,id,JSON.stringify(items),new Date().toISOString());await tx.runAsync('DELETE FROM carrito_local WHERE cliente_id=?',uid);});}
+export async function loadPending(uid:number):Promise<Pendiente[]>{const d=await ready();const rows=await d.getAllAsync<any>('SELECT request_id,items_json,estado,error,creado_en FROM compras_pendientes WHERE cliente_id=? ORDER BY creado_en',uid);return rows.map(r=>({request_id:r.request_id,items:JSON.parse(r.items_json),estado:r.estado,error:r.error,creado_en:r.creado_en}));}
+export async function updatePending(uid:number,id:string,estado:string,error:string|null){const d=await ready();await d.runAsync('UPDATE compras_pendientes SET estado=?,error=? WHERE cliente_id=? AND request_id=?',estado,error,uid,id);}
+export async function removePending(uid:number,id:string){const d=await ready();await d.runAsync('DELETE FROM compras_pendientes WHERE cliente_id=? AND request_id=?',uid,id);}
